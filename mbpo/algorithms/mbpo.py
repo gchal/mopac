@@ -8,6 +8,7 @@ from numbers import Number
 from itertools import count
 import gtimer as gt
 import pdb
+from queue import Queue
 
 import numpy as np
 import tensorflow as tf
@@ -164,6 +165,7 @@ class MBPO(RLAlgorithm):
         self._init_placeholders()
         self._init_actor_update()
         self._init_critic_update()
+        self._init_mppi()
 
     def _train(self):
         
@@ -227,7 +229,7 @@ class MBPO(RLAlgorithm):
                     
                     self._set_rollout_length()
                     self._reallocate_model_pool()
-                    model_rollout_metrics = self._rollout_model(rollout_batch_size=self._rollout_batch_size, deterministic=self._deterministic)
+                    model_rollout_metrics, x_total_cost, x_acts = self._rollout_model(deterministic=self._deterministic)
                     model_metrics.update(model_rollout_metrics)
                     
 
@@ -235,7 +237,13 @@ class MBPO(RLAlgorithm):
                     # self._visualize_model(self._evaluation_environment, self._total_timestep)
                     self._training_progress.resume()
 
-                self._do_sampling(timestep=self._total_timestep)
+                    self._mppi_optimus_control(x_acts, x_total_cost)  # fills action_q
+                # pop action from q, if action==None -> policy is used
+                action = None
+                if not self.action_q.empty():
+                    action = self.action_q.get()
+                # new opt arg to override action (otherwise action will come from policy)
+                self._do_sampling(timestep=self._total_timestep, action=action) # steps the env!!
                 gt.stamp('sample')
 
                 if self.ready_to_train:
@@ -378,35 +386,78 @@ class MBPO(RLAlgorithm):
         model_metrics = self._model.train(train_inputs, train_outputs, **kwargs)
         return model_metrics
 
-    def _rollout_model(self, rollout_batch_size, **kwargs):
+    def _rollout_model(self, gamma=0.99, **kwargs):
         print('[ Model Rollout ] Starting | Epoch: {} | Rollout length: {} | Batch size: {}'.format(
-            self._epoch, self._rollout_length, rollout_batch_size
+            self._epoch, self._rollout_length, self._rollout_batch_size
         ))
-        batch = self.sampler.random_batch(rollout_batch_size)
+        batch = self.sampler.random_batch(self._rollout_batch_size)
         obs = batch['observations']
         steps_added = []
-        for i in range(self._rollout_length):
+
+        x_acts = np.zeros((self._rollout_batch_size, self._rollout_length, self._action_shape[0]))
+        x_total_cost = np.zeros((self._rollout_batch_size, 1)) #since we are using cost, we use the negative reward
+
+        for t in range(self._rollout_length):
+            print("obs", obs.shape)
             act = self._policy.actions_np(obs)
+            print("act", act.shape)
+
+            # NOISE stuff
+            #act = self.noise[:,:,t].transpose()+self.U[:,t]
+            #act = self.U[:,t]  # TODO: add noise
+            #act = np.clip(U, -self.uclip, self.uclip)
             
             next_obs, rew, term, info = self.fake_env.step(obs, act, **kwargs)
             steps_added.append(len(obs))
+            print("rew", rew.shape)
+
+            x_total_cost += -((gamma**t)*rew)  # sum up cost for trajectory accross batch
+            x_acts[:,t,:] = act
 
             samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}
             self._model_pool.add_samples(samples)
 
             nonterm_mask = ~term.squeeze(-1)
             if nonterm_mask.sum() == 0:
-                print('[ Model Rollout ] Breaking early: {} | {} / {}'.format(i, nonterm_mask.sum(), nonterm_mask.shape))
+                print('[ Model Rollout ] Breaking early: {} | {} / {}'.format(t, nonterm_mask.sum(), nonterm_mask.shape))
                 break
 
-            obs = next_obs[nonterm_mask]
+            #obs = next_obs[nonterm_mask]  # this crap changes the shape of the array!
+            obs = next_obs
 
-        mean_rollout_length = sum(steps_added) / rollout_batch_size
+        mean_rollout_length = sum(steps_added) / self._rollout_batch_size
         rollout_stats = {'mean_rollout_length': mean_rollout_length}
         print('[ Model Rollout ] Added: {:.1e} | Model pool: {:.1e} (max {:.1e}) | Length: {} | Train rep: {}'.format(
             sum(steps_added), self._model_pool.size, self._model_pool._max_size, mean_rollout_length, self._n_train_repeat
         ))
-        return rollout_stats
+
+        return rollout_stats, x_total_cost, x_acts
+
+    # TODO: melt with above
+    def _mppi_optimus_control(self, acts, total_cost, lambda_=1.0, seq_len=25):
+        # dsr is discounted sum of returns of the best trajectory tested
+        # dsr = np.max(-total_cost) #since this is like a reward, need it to be positive
+        alpha = np.exp(-(1/lambda_) * (total_cost - min(total_cost)))
+
+        #alpha = np.exp((1/lambda_) * (total_cost - max(-total_cost)))  # ref: trajopt
+        #alpha = np.exp(-(1/lambda_) * (total_cost + Q)) * pi_ / pi_v  # ref: MPQ
+
+        eta = np.sum(alpha) + 1e-6  # different in MPQ
+        omega = 1/eta * alpha
+
+        u_delta = np.sum((omega.squeeze() * acts.T).T, axis=0)
+
+        # NOISE stuff
+        #u_delta = np.clip(u_delta, -self.uclip, self.uclip)
+        #lr = 1  # TODO: set learning rate?
+        #self.U += lr * u_delta
+        #action = self.U[:,0].squeeze()  # best action
+        #self.U = np.roll(self.U, -1, axis=1)  # shift all elements to the left
+
+        # take first x actions in sequence and q
+        for act in u_delta[:seq_len]:
+            self.action_q.put(act)
+
 
     def _visualize_model(self, env, timestep):
         ## save env state
@@ -638,6 +689,13 @@ class MBPO(RLAlgorithm):
 
     def _init_training(self):
         self._update_target(tau=1.0)
+
+    def _init_mppi(self, hl=0.4, horiz=15, noise_mu=0., noise_sigma=0.5, uclip=1.4):
+        #action_len = self._action_shape[0]
+        #self.U = np.random.uniform(low=-hl, high=hl, size=(action_len, horiz))
+        #self.noise = np.random.normal(loc=noise_mu, scale=noise_sigma, size=(action_len, self._rollout_batch_size, horiz))
+        self.uclip = uclip
+        self.action_q = Queue()
 
     def _update_target(self, tau=None):
         tau = tau or self._tau

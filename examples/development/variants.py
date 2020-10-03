@@ -230,7 +230,7 @@ ENVIRONMENT_PARAMS = {
     }
 }
 
-NUM_CHECKPOINTS = 10
+NUM_CHECKPOINTS = 100
 
 
 def get_variant_spec_base(universe, domain, task, policy, algorithm):

@@ -4,7 +4,7 @@ params = {
     'domain': 'AntTruncatedObs', ## mbpo/env/ant.py
     'task': 'v2',
 
-    'log_dir': '~/ray_mbpo/',
+    'log_dir': '/work/scratch/dn38jyty/ray_mbpo/',
     'exp_name': 'defaults',
 
     'kwargs': {
@@ -21,13 +21,13 @@ params = {
 
         'model_train_freq': 250,
         'model_retain_epochs': 1,
-        'rollout_batch_size': 100e3,
+        'rollout_batch_size': 1000,
         'deterministic': False,
         'num_networks': 7,
         'num_elites': 5,
         'real_ratio': 0.05,
         'target_entropy': -4,
         'max_model_t': None,
-        'rollout_schedule': [20, 100, 1, 25],
+        'rollout_schedule': [20, 100, 5, 25],
     }
 }
