@@ -63,6 +63,8 @@ class MBPO(RLAlgorithm):
             reparameterize=False,
             store_extra_policy_info=False,
 
+            mopac=False,
+
             deterministic=False,
             model_train_freq=250,
             num_networks=7,
@@ -70,6 +72,7 @@ class MBPO(RLAlgorithm):
             model_retain_epochs=20,
             rollout_batch_size=100e3,
             real_ratio=0.1,
+            ratio_schedule=[0,40,1.0,0.10],
             rollout_schedule=[20,100,1,1],
             hidden_dim=200,
             max_model_t=None,
@@ -106,18 +109,21 @@ class MBPO(RLAlgorithm):
         self.fake_env = FakeEnv(self._model, self._static_fns)
 
         self._rollout_schedule = rollout_schedule
+        self._ratio_schedule = ratio_schedule
         self._max_model_t = max_model_t
 
         # self._model_pool_size = model_pool_size
         # print('[ MBPO ] Model pool size: {:.2E}'.format(self._model_pool_size))
         # self._model_pool = SimpleReplayPool(pool._observation_space, pool._action_space, self._model_pool_size)
 
+        self._mopac = mopac
+
         self._model_retain_epochs = model_retain_epochs
 
         self._model_train_freq = model_train_freq
         self._rollout_batch_size = int(rollout_batch_size)
         self._deterministic = deterministic
-        self._real_ratio = real_ratio
+        #self._real_ratio = real_ratio
 
         self._log_dir = os.getcwd()
         self._writer = Writer(self._log_dir)
@@ -128,6 +134,9 @@ class MBPO(RLAlgorithm):
 
         self._Qs = Qs
         self._Q_targets = tuple(tf.keras.models.clone_model(Q) for Q in Qs)
+
+        self._V = tf.keras.models.clone_model(Qs[0])
+        self._V_targets = tf.keras.models.clone_model(Qs[0])
 
         self._pool = pool
         self._plotter = plotter
@@ -220,6 +229,7 @@ class MBPO(RLAlgorithm):
                 self._timestep_before_hook()
                 gt.stamp('timestep_before_hook')
 
+                self._set_real_ratio()
                 if self._timestep % self._model_train_freq == 0 and self._real_ratio < 1.0:
                     self._training_progress.pause()
                     print('[ MBPO ] log_dir: {} | ratio: {}'.format(self._log_dir, self._real_ratio))
@@ -232,33 +242,17 @@ class MBPO(RLAlgorithm):
                     gt.stamp('epoch_train_model')
                     
                     self._set_rollout_length()
+                    self._set_real_ratio()
                     self._reallocate_model_pool()
-                    model_rollout_metrics = self._rollout_model(deterministic=self._deterministic)
+                    model_rollout_metrics = self._rollout_model(mopac=self._mopac, deterministic=self._deterministic)
                     model_metrics.update(model_rollout_metrics)
-
-                    #x_dsr = np.max(x_total_reward)
 
                     gt.stamp('epoch_rollout_model')
                     # self._visualize_model(self._evaluation_environment, self._total_timestep)
                     self._training_progress.resume()
 
-                    #act = self._mppi_optimus_control(x_acts, x_total_reward)  # fills action_q
-                    # take action seq with highest reward
-                    #act_seq = x_acts[np.argmax(x_total_reward)]
-                    # take fist action
-                    #act = act_seq[0]
 
-                ## pop action from q, if action==None -> policy is used
-                #action = None
-                #if not self.action_q.empty():
-                #    action = self.action_q.get()
-                # new opt arg to override action (otherwise action will come from policy)
-
-                #act = None
-                #if obs is not None:
-                #    act = self.mpc.command(torch.tensor(obs, dtype=torch.double)).cpu().numpy()
                 self._do_sampling(timestep=self._total_timestep) # steps the env!!
-                #obs, *_ = self._do_sampling(timestep=self._total_timestep, action=act) # steps the env!!
                 gt.stamp('sample')
 
                 if self.ready_to_train:
@@ -371,6 +365,20 @@ class MBPO(RLAlgorithm):
             self._epoch, min_epoch, max_epoch, self._rollout_length, min_length, max_length
         ))
 
+    def _set_real_ratio(self):
+        min_epoch, max_epoch, min_length, max_length = self._ratio_schedule
+        if self._epoch <= min_epoch:
+            y = min_length
+        else:
+            dx = (self._epoch - min_epoch) / (max_epoch - min_epoch)
+            dx = min(dx, 1)
+            y = dx * (max_length - min_length) + min_length
+
+        self._real_ratio = y
+        print('[ Model Length ] Epoch: {} (min: {}, max: {}) | Ratio: {} (min: {} , max: {})'.format(
+            self._epoch, min_epoch, max_epoch, self._real_ratio, min_length, max_length
+        ))
+
     def _reallocate_model_pool(self):
         obs_space = self._pool._observation_space
         act_space = self._pool._action_space
@@ -402,7 +410,7 @@ class MBPO(RLAlgorithm):
         model_metrics = self._model.train(train_inputs, train_outputs, **kwargs)
         return model_metrics
 
-    def _rollout_model(self, gamma=0.9, **kwargs):
+    def _rollout_model(self, gamma=0.9, mopac=False, **kwargs):
         print('[ Model Rollout ] Starting | Epoch: {} | Rollout length: {} | Batch size: {}'.format(
             self._epoch, self._rollout_length, self._rollout_batch_size
         ))
@@ -410,14 +418,15 @@ class MBPO(RLAlgorithm):
         obs = batch['observations']
         steps_added = []
 
-        # repeat initial states for mppi
-        obs = np.repeat(obs, self._rollout_batch_size, axis=0)
+        if mopac:
+            # repeat initial states for mppi
+            obs = np.repeat(obs, self._rollout_batch_size, axis=0)
 
-        x_obs = np.zeros((self._rollout_batch_size**2, self._rollout_length, *self._observation_shape))
-        x_next_obs = np.zeros((self._rollout_batch_size**2, self._rollout_length, *self._observation_shape))
-        x_acts = np.zeros((self._rollout_batch_size**2, self._rollout_length, self._action_shape[0]))
-        x_total_reward = np.zeros((self._rollout_batch_size**2, self._rollout_length, 1)) #since we are using reward, we use the negative reward
-        x_term = np.zeros((self._rollout_batch_size**2, self._rollout_length, 1))
+            x_obs = np.zeros((self._rollout_batch_size**2, self._rollout_length, *self._observation_shape))
+            x_next_obs = np.zeros((self._rollout_batch_size**2, self._rollout_length, *self._observation_shape))
+            x_acts = np.zeros((self._rollout_batch_size**2, self._rollout_length, self._action_shape[0]))
+            x_total_reward = np.zeros((self._rollout_batch_size**2, self._rollout_length, 1)) #since we are using reward, we use the negative reward
+            x_term = np.zeros((self._rollout_batch_size**2, self._rollout_length, 1))
 
         for t in range(self._rollout_length):
             act = self._policy.actions_np(obs)
@@ -431,41 +440,41 @@ class MBPO(RLAlgorithm):
             next_obs, rew, term, info = self.fake_env.step(obs, act, **kwargs)
             steps_added.append(len(obs))
 
-            x_total_reward[:,t] = (gamma**t) * rew
-            x_term[:,t] = term
-            x_acts[:,t] = act
-            x_obs[:,t] = obs
-            x_next_obs[:,t] = next_obs
-
-            #samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}
-            #self._model_pool.add_samples(samples)
+            if mopac:
+                x_total_reward[:,t] = (gamma**t) * rew
+                x_term[:,t] = term
+                x_acts[:,t] = act
+                x_obs[:,t] = obs
+                x_next_obs[:,t] = next_obs
+            else:
+                samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}
+                self._model_pool.add_samples(samples)
 
             nonterm_mask = ~term.squeeze(-1)
             if nonterm_mask.sum() == 0:
                 print('[ Model Rollout ] Breaking early: {} | {} / {}'.format(t, nonterm_mask.sum(), nonterm_mask.shape))
                 break
 
-            #obs = next_obs[nonterm_mask]  # this crap changes the shape of the array!
-            obs = next_obs
+            obs = next_obs if mopac else next_obs[nonterm_mask]  # making changes the shape of the array!
 
-        #x_a = self._mppi_optimus_control(x_acts, x_total_reward)
-        #x_s1 = self._mppi_optimus_control(x_obs, x_total_reward)
-        #x_s2 = self._mppi_optimus_control(x_next_obs, x_total_reward)
+        if mopac:
+            #x_a = self._mppi_optimus_control(x_acts, x_total_reward)
+            #x_s1 = self._mppi_optimus_control(x_obs, x_total_reward)
+            #x_s2 = self._mppi_optimus_control(x_next_obs, x_total_reward)
 
-        # add minimum cost trajectories to pool
-        # TODO: remove loop, do with 4-dimensional tensor
-        for l in range(0, self._rollout_batch_size**2, self._rollout_batch_size):
-            r = range(l, l+self._rollout_batch_size)
-            x_i = np.argmax(np.sum(x_total_reward[r], axis=1))
-            x_a = x_acts[r][x_i]
-            x_s1 = x_obs[r][x_i]
-            x_s2 = x_next_obs[r][x_i]
-            x_r = x_total_reward[r][x_i]
-            x_t = x_term[r][x_i]
-            
-            samples = {'observations': x_s1, 'actions': x_a, 'next_observations': x_s2, 'rewards': x_r, 'terminals': x_t}
-            self._model_pool.add_samples(samples)
-
+            # add minimum cost trajectories to pool
+            # TODO: remove loop, do with 4-dimensional tensor
+            for l in range(0, self._rollout_batch_size**2, self._rollout_batch_size):
+                r = range(l, l+self._rollout_batch_size)
+                x_i = np.argmax(np.sum(x_total_reward[r], axis=1))
+                x_a = x_acts[r][x_i]
+                x_s1 = x_obs[r][x_i]
+                x_s2 = x_next_obs[r][x_i]
+                x_r = x_total_reward[r][x_i]
+                x_t = x_term[r][x_i]
+                
+                samples = {'observations': x_s1, 'actions': x_a, 'next_observations': x_s2, 'rewards': x_r, 'terminals': x_t}
+                self._model_pool.add_samples(samples)
 
         mean_rollout_length = sum(steps_added) / self._rollout_batch_size
         rollout_stats = {'mean_rollout_length': mean_rollout_length}

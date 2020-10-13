@@ -19,15 +19,17 @@ params = {
         'tau': 5e-3,
         'reward_scale': 1.0,
 
+        'mopac': True,
+
         'model_train_freq': 250,
         'model_retain_epochs': 1,
-        'rollout_batch_size': 1000,
+        'rollout_batch_size': 1e4,
         'deterministic': False,
         'num_networks': 7,
         'num_elites': 5,
         'real_ratio': 0.05,
         'target_entropy': -4,
         'max_model_t': None,
-        'rollout_schedule': [20, 100, 5, 25],
+        'rollout_schedule': [5, 100, 2, 25],
     }
 }
