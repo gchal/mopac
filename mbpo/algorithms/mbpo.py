@@ -485,8 +485,9 @@ class MBPO(RLAlgorithm):
                 # control noise
                 u_delta = np.sum((omega.squeeze() * self.noise[r].T).T, axis=0)
 
-                # tweak control (only first value in range used, l instead of r)
-                self.U[l] += 1 * u_delta
+                # tweak control (duplicated accross range)
+                self.U[r] += 1 * u_delta
+                self.U[r] = np.clip(self.U[r], -self.uclip, self.uclip)
 
                 # best action for pool
                 action = self.U[l][0].squeeze()  
@@ -497,7 +498,7 @@ class MBPO(RLAlgorithm):
                 self._model_pool.add_sample(sample)
 
                 # shift all elements to the left along horizon (for next env step)
-                self.U[l] = np.roll(self.U[l], -1, axis=0)
+                self.U[r] = np.roll(self.U[r], -1, axis=1)
 
                 # add minimum cost trajectories
                 #for x_i in (np.argmin(s), np.argmax(s)):
