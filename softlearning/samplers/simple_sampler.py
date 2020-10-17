@@ -68,6 +68,9 @@ class SimpleSampler(BaseSampler):
                 field_name: np.array(values)
                 for field_name, values in self._current_path.items()
             }
+
+            last_path['cumrewards'] = last_path['rewards'].copy()
+
             self.pool.add_path(last_path)
             self._last_n_paths.appendleft(last_path)
 

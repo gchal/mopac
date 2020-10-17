@@ -30,7 +30,7 @@ class FakeEnv:
 
         return log_prob, stds
 
-    def step(self, obs, act, deterministic=False):
+    def step(self, obs, act, repeats=1, deterministic=False):
         assert len(obs.shape) == len(act.shape)
         if len(obs.shape) == 1:
             obs = obs[None]
@@ -51,7 +51,7 @@ class FakeEnv:
 
         #### choose one model from ensemble
         num_models, batch_size, _ = ensemble_model_means.shape
-        model_inds = self.model.random_inds(batch_size)
+        model_inds = self.model.random_inds(int(batch_size/repeats)).repeat(repeats)
         batch_inds = np.arange(0, batch_size)
         samples = ensemble_samples[model_inds, batch_inds]
         model_means = ensemble_model_means[model_inds, batch_inds]

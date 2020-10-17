@@ -24,8 +24,10 @@ from mbpo.utils.visualization import visualize_policy
 from mbpo.utils.logging import Progress
 import mbpo.utils.filesystem as filesystem
 
-#import torch
-#from pytorch_mppi import mppi
+import torch
+from pytorch_mppi import mppi
+
+import ray
 
 
 def td_target(reward, discount, next_value):
@@ -48,6 +50,7 @@ class MBPO(RLAlgorithm):
             evaluation_environment,
             policy,
             Qs,
+            Vs,
             pool,
             static_fns,
             plotter=None,
@@ -72,7 +75,7 @@ class MBPO(RLAlgorithm):
             model_retain_epochs=20,
             rollout_batch_size=100e3,
             real_ratio=0.1,
-            ratio_schedule=[0,40,1.0,0.10],
+            ratio_schedule=[0,100,0.5,0.5],
             rollout_schedule=[20,100,1,1],
             hidden_dim=200,
             max_model_t=None,
@@ -135,8 +138,8 @@ class MBPO(RLAlgorithm):
         self._Qs = Qs
         self._Q_targets = tuple(tf.keras.models.clone_model(Q) for Q in Qs)
 
-        self._V = tf.keras.models.clone_model(Qs[0])
-        self._V_targets = tf.keras.models.clone_model(Qs[0])
+        self._Vs = Vs
+        self._V_targets = tf.keras.models.clone_model(Vs)
 
         self._pool = pool
         self._plotter = plotter
@@ -144,6 +147,7 @@ class MBPO(RLAlgorithm):
 
         self._policy_lr = lr
         self._Q_lr = lr
+        self._V_lr = lr
 
         self._reward_scale = reward_scale
         self._target_entropy = (
@@ -177,6 +181,7 @@ class MBPO(RLAlgorithm):
         self._init_placeholders()
         self._init_actor_update()
         self._init_critic_update()
+        self._init_value_update()
         self._init_mppi()
 
     def _train(self):
@@ -242,7 +247,6 @@ class MBPO(RLAlgorithm):
                     gt.stamp('epoch_train_model')
                     
                     self._set_rollout_length()
-                    self._set_real_ratio()
                     self._reallocate_model_pool()
                     model_rollout_metrics = self._rollout_model(mopac=self._mopac, deterministic=self._deterministic)
                     model_metrics.update(model_rollout_metrics)
@@ -250,7 +254,6 @@ class MBPO(RLAlgorithm):
                     gt.stamp('epoch_rollout_model')
                     # self._visualize_model(self._evaluation_environment, self._total_timestep)
                     self._training_progress.resume()
-
 
                 self._do_sampling(timestep=self._total_timestep) # steps the env!!
                 gt.stamp('sample')
@@ -410,7 +413,7 @@ class MBPO(RLAlgorithm):
         model_metrics = self._model.train(train_inputs, train_outputs, **kwargs)
         return model_metrics
 
-    def _rollout_model(self, gamma=0.9, mopac=False, **kwargs):
+    def _rollout_model(self, gamma=0.9, repeats=50, mopac=False, experimental=False, **kwargs):
         print('[ Model Rollout ] Starting | Epoch: {} | Rollout length: {} | Batch size: {}'.format(
             self._epoch, self._rollout_length, self._rollout_batch_size
         ))
@@ -420,42 +423,56 @@ class MBPO(RLAlgorithm):
 
         if mopac:
             # repeat initial states for mppi
-            obs = np.repeat(obs, self._rollout_batch_size, axis=0)
+            obs = np.repeat(obs, repeats, axis=0)
 
-            x_obs = np.zeros((self._rollout_batch_size**2, self._rollout_length, *self._observation_shape))
-            x_next_obs = np.zeros((self._rollout_batch_size**2, self._rollout_length, *self._observation_shape))
-            x_acts = np.zeros((self._rollout_batch_size**2, self._rollout_length, self._action_shape[0]))
-            x_total_reward = np.zeros((self._rollout_batch_size**2, self._rollout_length, 1)) #since we are using reward, we use the negative reward
-            x_term = np.zeros((self._rollout_batch_size**2, self._rollout_length, 1))
+            x_obs = np.zeros((self._rollout_batch_size*repeats, self._rollout_length, *self._observation_shape))
+            x_next_obs = np.zeros((self._rollout_batch_size*repeats, self._rollout_length, *self._observation_shape))
+            x_acts = np.zeros((self._rollout_batch_size*repeats, self._rollout_length, self._action_shape[0]))
+            x_total_reward = np.zeros((self._rollout_batch_size*repeats, self._rollout_length, 1))
+            x_term = np.zeros((self._rollout_batch_size*repeats, self._rollout_length, 1))
 
-        for t in range(self._rollout_length):
-            act = self._policy.actions_np(obs)
-            #act = np.array([self.mpc.command(torch.tensor(o, dtype=torch.double)).cpu().numpy()
-            #        for o in obs])
+            #x_noise = np.random.normal(loc=self.noise_mu, scale=self.noise_sigma, size=(self._rollout_batch_size*repeats, self._rollout_length, self._action_shape[0]))
 
-            # NOISE stuff
-            #act = self.noise[:,:,t].transpose()+self.U[:,t]
-            #act = np.clip(U, -self.uclip, self.uclip)
-            
+        if experimental:
+            act = np.array([self.mpc.command(torch.tensor(o, dtype=torch.double)) for o in obs])
+
             next_obs, rew, term, info = self.fake_env.step(obs, act, **kwargs)
             steps_added.append(len(obs))
+            samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}
+            self._model_pool.add_samples(samples)
+        else:
+            for t in range(self._rollout_length):
+                act = self._policy.actions_np(obs)
 
-            if mopac:
-                x_total_reward[:,t] = (gamma**t) * rew
-                x_term[:,t] = term
-                x_acts[:,t] = act
-                x_obs[:,t] = obs
-                x_next_obs[:,t] = next_obs
-            else:
-                samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}
-                self._model_pool.add_samples(samples)
+                # NOISE stuff
+                #act = self.noise[:,:,t].transpose()+self.U[:,t]
+                #act = np.clip(U, -self.uclip, self.uclip)
+                
+                next_obs, rew, term, info = self.fake_env.step(obs, act, repeats, **kwargs)
+                steps_added.append(len(obs))
 
-            nonterm_mask = ~term.squeeze(-1)
-            if nonterm_mask.sum() == 0:
-                print('[ Model Rollout ] Breaking early: {} | {} / {}'.format(t, nonterm_mask.sum(), nonterm_mask.shape))
-                break
+                if mopac:
+                    #V_log_targets = tuple(V([self._observations_ph, act]) for V in self._Vs)
+                    #obs32 = tf.cast(obs, dtype = tf.float32)
 
-            obs = next_obs if mopac else next_obs[nonterm_mask]  # making changes the shape of the array!
+                    # V value function
+                    x_V = self._Vs.predict([obs])
+
+                    x_total_reward[:,t] = (gamma**t) * rew + x_V
+                    x_term[:,t] = term
+                    x_acts[:,t] = act
+                    x_obs[:,t] = obs
+                    x_next_obs[:,t] = next_obs
+                else:
+                    samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}
+                    self._model_pool.add_samples(samples)
+
+                nonterm_mask = ~term.squeeze(-1)
+                if nonterm_mask.sum() == 0:
+                    print('[ Model Rollout ] Breaking early: {} | {} / {}'.format(t, nonterm_mask.sum(), nonterm_mask.shape))
+                    break
+
+                obs = next_obs if mopac else next_obs[nonterm_mask]  # making changes the shape of the array!
 
         if mopac:
             #x_a = self._mppi_optimus_control(x_acts, x_total_reward)
@@ -464,16 +481,18 @@ class MBPO(RLAlgorithm):
 
             # add minimum cost trajectories to pool
             # TODO: remove loop, do with 4-dimensional tensor
-            for l in range(0, self._rollout_batch_size**2, self._rollout_batch_size):
-                r = range(l, l+self._rollout_batch_size)
-                x_i = np.argmax(np.sum(x_total_reward[r], axis=1))
+            for l in range(0, self._rollout_batch_size*repeats, repeats):
+                r = range(l, l+repeats)
+                s = np.sum(x_total_reward[r], axis=1)
+                x_i = np.argmax(s)
                 x_a = x_acts[r][x_i]
                 x_s1 = x_obs[r][x_i]
                 x_s2 = x_next_obs[r][x_i]
                 x_r = x_total_reward[r][x_i]
                 x_t = x_term[r][x_i]
                 
-                samples = {'observations': x_s1, 'actions': x_a, 'next_observations': x_s2, 'rewards': x_r, 'terminals': x_t}
+                samples = {'observations': x_s1, 'actions': x_a, 'next_observations': x_s2, 'rewards': x_r, 'terminals': x_t,
+                            'cumrewards': s[x_i].repeat(len(x_t)).reshape(-1, 1)}
                 self._model_pool.add_samples(samples)
 
         mean_rollout_length = sum(steps_added) / self._rollout_batch_size
@@ -492,8 +511,7 @@ class MBPO(RLAlgorithm):
         #alpha = np.exp(-(1/lambda_) * (total_cost + Q)) * pi_ / pi_v  # ref: MPQ
 
         # blend actions accross all traj in batch
-        eta = np.sum(alpha) + 1e-6  # different in MPQ
-        omega = 1/eta * alpha
+        omega = alpha / (np.sum(alpha) + 1e-6)
         u = np.sum((omega.squeeze() * acts.T).T, axis=0)
 
         # NOISE stuff
@@ -507,8 +525,7 @@ class MBPO(RLAlgorithm):
         #for act in u:
         #    self.action_q.put(act)
 
-        # return first action
-        return u[0]
+        return u
 
 
     def _visualize_model(self, env, timestep):
@@ -592,6 +609,12 @@ class MBPO(RLAlgorithm):
             name='terminals',
         )
 
+        self._cumrewards_ph = tf.placeholder(
+            tf.float32,
+            shape=(None, 1),
+            name='cumrewards',
+        )
+
         if self._store_extra_policy_info:
             self._log_pis_ph = tf.placeholder(
                 tf.float32,
@@ -622,6 +645,10 @@ class MBPO(RLAlgorithm):
             next_value=(1 - self._terminals_ph) * next_value)
 
         return Q_target
+
+    def _get_V_target(self):
+        V_target = self._reward_scale * self._cumrewards_ph
+        return V_target
 
     def _init_critic_update(self):
         """Create minimization operation for critic Q-function.
@@ -663,6 +690,39 @@ class MBPO(RLAlgorithm):
             in enumerate(zip(self._Qs, Q_losses, self._Q_optimizers)))
 
         self._training_ops.update({'Q': tf.group(Q_training_ops)})
+
+    def _init_value_update(self):
+        """Create minimization operation for critic V-function.
+
+        Creates a `tf.optimizer.minimize` operation for updating
+        critic V-function with gradient descent, and appends it to
+        `self._training_ops` attribute.
+        """
+        V_target = tf.stop_gradient(self._get_V_target())
+
+        assert V_target.shape.as_list() == [None, 1]
+
+        V_values = self._V_values = self._Vs([self._observations_ph])
+
+        V_losses = self._V_losses = tf.losses.mean_squared_error(
+                labels=V_target, predictions=V_values, weights=0.5)
+
+        self._V_optimizers = tf.train.AdamOptimizer(
+                learning_rate=self._V_lr,
+                name='{}_optimizer'.format(self._Vs._name)
+            )
+        V_training_ops = tf.contrib.layers.optimize_loss(
+                V_losses,
+                self.global_step,
+                learning_rate=self._V_lr,
+                optimizer=self._V_optimizers,
+                variables=self._Vs.trainable_variables,
+                increment_global_step=False,
+                summaries=((
+                    "loss", "gradients", "gradient_norm", "global_gradient_norm"
+                ) if self._tf_summaries else ()))
+
+        self._training_ops.update({'V': tf.group(V_training_ops)})
 
     def _init_actor_update(self):
         """Create minimization operations for policy and entropy.
@@ -742,11 +802,12 @@ class MBPO(RLAlgorithm):
     def _init_training(self):
         self._update_target(tau=1.0)
 
-    def _init_mppi(self, hl=0.4, horiz=15, noise_mu=0., noise_sigma=0.5, uclip=1.4, lambda_=1.0, nx=2):
+    def _init_mppi(self, hl=0.4, horiz=15, rollouts=40, noise_mu=0., noise_sigma=0.5, uclip=1.4, lambda_=1.0):
         action_len = self._action_shape[0]
         obs_len = self._observation_shape[0]
         #self.U = np.random.uniform(low=-hl, high=hl, size=(horiz, action_len))
-        #self.noise = np.random.normal(loc=noise_mu, scale=noise_sigma, size=(self._rollout_batch_size, horiz, action_len))
+        self.noise_mu = noise_mu
+        self.noise_sigma = noise_sigma
         self.uclip = uclip
         self.action_q = Queue()
 
@@ -757,9 +818,9 @@ class MBPO(RLAlgorithm):
 
             return next_obs, rew
 
-        #self.mpc = mppi.MPPI(dynamics, obs_len, action_len, noise_sigma,
-        #                    num_samples=self._rollout_batch_size, horizon=horiz, lambda_=lambda_,
-        #                    u_min=-uclip, u_max=+uclip)
+        self.mpc = mppi.MPPI(dynamics, obs_len, action_len, noise_sigma,
+                            num_samples=rollouts, horizon=horiz, lambda_=lambda_,
+                            u_min=-uclip, u_max=+uclip)
 
     def _update_target(self, tau=None):
         tau = tau or self._tau
@@ -771,6 +832,13 @@ class MBPO(RLAlgorithm):
                 tau * source + (1.0 - tau) * target
                 for source, target in zip(source_params, target_params)
             ])
+
+        source_params = self._Vs.get_weights()
+        target_params = self._V_targets.get_weights()
+        self._V_targets.set_weights([
+            tau * source + (1.0 - tau) * target
+            for source, target in zip(source_params, target_params)
+        ])
 
     def _do_training(self, iteration, batch):
         """Runs the operations for updating training and target ops."""
@@ -794,8 +862,10 @@ class MBPO(RLAlgorithm):
             self._actions_ph: batch['actions'],
             self._next_observations_ph: batch['next_observations'],
             self._rewards_ph: batch['rewards'],
-            self._terminals_ph: batch['terminals'],
+            self._terminals_ph: batch['terminals']
         }
+
+        feed_dict[self._cumrewards_ph] = batch['cumrewards']
 
         if self._store_extra_policy_info:
             feed_dict[self._log_pis_ph] = batch['log_pis']

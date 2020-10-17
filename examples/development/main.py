@@ -14,6 +14,7 @@ from softlearning.policies.utils import get_policy_from_variant, get_policy
 from softlearning.replay_pools.utils import get_replay_pool_from_variant
 from softlearning.samplers.utils import get_sampler_from_variant
 from softlearning.value_functions.utils import get_Q_function_from_variant
+from softlearning.value_functions.utils import get_V_function_from_variant
 
 from softlearning.misc.utils import set_seed, initialize_tf_variables
 from examples.instrument import run_example_local
@@ -54,6 +55,8 @@ class ExperimentRunner(tune.Trainable):
         sampler = self.sampler = get_sampler_from_variant(variant)
         Qs = self.Qs = get_Q_function_from_variant(
             variant, training_environment)
+        Vs = self.Vs = get_V_function_from_variant(
+            variant, training_environment)
         policy = self.policy = get_policy_from_variant(
             variant, training_environment, Qs)
         initial_exploration_policy = self.initial_exploration_policy = (
@@ -71,6 +74,7 @@ class ExperimentRunner(tune.Trainable):
             policy=policy,
             initial_exploration_policy=initial_exploration_policy,
             Qs=Qs,
+            Vs=Vs,
             pool=replay_pool,
             static_fns=static_fns,
             sampler=sampler,
@@ -185,6 +189,7 @@ class ExperimentRunner(tune.Trainable):
 
         sampler = self.sampler = picklable['sampler']
         Qs = self.Qs = picklable['Qs']
+        Vs = self.Vs = picklable['Vs']
         # policy = self.policy = picklable['policy']
         policy = self.policy = (
             get_policy_from_variant(self._variant, training_environment, Qs))
@@ -199,6 +204,7 @@ class ExperimentRunner(tune.Trainable):
             policy=policy,
             initial_exploration_policy=initial_exploration_policy,
             Qs=Qs,
+            Vs=Vs,
             pool=replay_pool,
             sampler=sampler,
             session=self._session)

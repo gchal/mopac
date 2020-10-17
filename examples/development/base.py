@@ -163,6 +163,12 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params)
                 'hidden_layer_sizes': (M, M),
             }
         },
+        'V_params': {
+            'type': 'feedforward_V_function',
+            'kwargs': {
+                'hidden_layer_sizes': (M, M),
+            }
+        },
         'algorithm_params': algorithm_params,
         'replay_pool_params': {
             'type': 'SimpleReplayPool',
