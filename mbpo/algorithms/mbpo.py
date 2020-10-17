@@ -413,7 +413,7 @@ class MBPO(RLAlgorithm):
         model_metrics = self._model.train(train_inputs, train_outputs, **kwargs)
         return model_metrics
 
-    def _rollout_model(self, gamma=0.9, repeats=50, mopac=False, experimental=False, **kwargs):
+    def _rollout_model(self, gamma=0.9, lambda_=1.0, mopac=False, experimental=False, valuefunc=False, **kwargs):
         print('[ Model Rollout ] Starting | Epoch: {} | Rollout length: {} | Batch size: {}'.format(
             self._epoch, self._rollout_length, self._rollout_batch_size
         ))
@@ -423,15 +423,13 @@ class MBPO(RLAlgorithm):
 
         if mopac:
             # repeat initial states for mppi
-            obs = np.repeat(obs, repeats, axis=0)
+            obs = np.repeat(obs, self.repeats, axis=0)
 
-            x_obs = np.zeros((self._rollout_batch_size*repeats, self._rollout_length, *self._observation_shape))
-            x_next_obs = np.zeros((self._rollout_batch_size*repeats, self._rollout_length, *self._observation_shape))
-            x_acts = np.zeros((self._rollout_batch_size*repeats, self._rollout_length, self._action_shape[0]))
-            x_total_reward = np.zeros((self._rollout_batch_size*repeats, self._rollout_length, 1))
-            x_term = np.zeros((self._rollout_batch_size*repeats, self._rollout_length, 1))
-
-            #x_noise = np.random.normal(loc=self.noise_mu, scale=self.noise_sigma, size=(self._rollout_batch_size*repeats, self._rollout_length, self._action_shape[0]))
+            x_obs = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, *self._observation_shape))
+            x_next_obs = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, *self._observation_shape))
+            x_acts = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, self._action_shape[0]))
+            x_total_reward = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
+            x_term = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
 
         if experimental:
             act = np.array([self.mpc.command(torch.tensor(o, dtype=torch.double)) for o in obs])
@@ -442,23 +440,23 @@ class MBPO(RLAlgorithm):
             self._model_pool.add_samples(samples)
         else:
             for t in range(self._rollout_length):
-                act = self._policy.actions_np(obs)
-
-                # NOISE stuff
-                #act = self.noise[:,:,t].transpose()+self.U[:,t]
-                #act = np.clip(U, -self.uclip, self.uclip)
+                if mopac:
+                    act = self.U[:,t]
+                    # add noise and clip
+                    act += self.noise[:,t]
+                    act = np.clip(act, -self.uclip, self.uclip)
+                else:
+                    act = self._policy.actions_np(obs)
                 
-                next_obs, rew, term, info = self.fake_env.step(obs, act, repeats, **kwargs)
+                next_obs, rew, term, info = self.fake_env.step(obs, act, self.repeats, **kwargs)
                 steps_added.append(len(obs))
 
                 if mopac:
-                    #V_log_targets = tuple(V([self._observations_ph, act]) for V in self._Vs)
-                    #obs32 = tf.cast(obs, dtype = tf.float32)
+                    x_total_reward[:,t] = (gamma**t) * rew
 
-                    # V value function
-                    x_V = self._Vs.predict([obs])
+                    if valuefunc:
+                        x_total_reward[:,t] += self._Vs.predict([obs])
 
-                    x_total_reward[:,t] = (gamma**t) * rew + x_V
                     x_term[:,t] = term
                     x_acts[:,t] = act
                     x_obs[:,t] = obs
@@ -475,25 +473,43 @@ class MBPO(RLAlgorithm):
                 obs = next_obs if mopac else next_obs[nonterm_mask]  # making changes the shape of the array!
 
         if mopac:
-            #x_a = self._mppi_optimus_control(x_acts, x_total_reward)
-            #x_s1 = self._mppi_optimus_control(x_obs, x_total_reward)
-            #x_s2 = self._mppi_optimus_control(x_next_obs, x_total_reward)
+            # mppi optimization
+            for l in range(0, self._rollout_batch_size*self.repeats, self.repeats):
+                r = range(l, l+self.repeats)
+                s = np.sum(x_total_reward[r], axis=1)  # cum reward of rollout
 
-            # add minimum cost trajectories to pool
-            # TODO: remove loop, do with 4-dimensional tensor
-            for l in range(0, self._rollout_batch_size*repeats, repeats):
-                r = range(l, l+repeats)
-                s = np.sum(x_total_reward[r], axis=1)
-                x_i = np.argmax(s)
-                x_a = x_acts[r][x_i]
-                x_s1 = x_obs[r][x_i]
-                x_s2 = x_next_obs[r][x_i]
-                x_r = x_total_reward[r][x_i]
-                x_t = x_term[r][x_i]
-                
-                samples = {'observations': x_s1, 'actions': x_a, 'next_observations': x_s2, 'rewards': x_r, 'terminals': x_t,
-                            'cumrewards': s[x_i].repeat(len(x_t)).reshape(-1, 1)}
-                self._model_pool.add_samples(samples)
+                # normalize cum reward
+                alpha = np.exp(1/lambda_ * (s - np.max(s)))
+                omega = alpha / (np.sum(alpha) + 1e-6)
+
+                # control noise
+                u_delta = np.sum((omega.squeeze() * self.noise[r].T).T, axis=0)
+
+                # tweak control (only first value in range used, l instead of r)
+                self.U[l] += 1 * u_delta
+
+                # best action for pool
+                action = self.U[l][0].squeeze()  
+                obs_init = x_obs[l][0]
+                next_obs, rew, term, info = self.fake_env.step(obs_init, action, 1, **kwargs)
+
+                sample = {'observations': obs_init, 'actions': action, 'next_observations': next_obs, 'rewards': rew, 'terminals': term, 'cumrewards': np.max(s)}
+                self._model_pool.add_sample(sample)
+
+                # shift all elements to the left along horizon (for next env step)
+                self.U[l] = np.roll(self.U[l], -1, axis=0)
+
+                # add minimum cost trajectories
+                #for x_i in (np.argmin(s), np.argmax(s)):
+                #    x_a = x_acts[r][x_i]
+                #    x_s1 = x_obs[r][x_i]
+                #    x_s2 = x_next_obs[r][x_i]
+                #    x_r = x_total_reward[r][x_i]
+                #    x_t = x_term[r][x_i]
+                #    
+                #    samples = {'observations': x_s1, 'actions': x_a, 'next_observations': x_s2, 'rewards': x_r, 'terminals': x_t,
+                #                'cumrewards': s[x_i].repeat(len(x_t)).reshape(-1, 1)}
+                #    self._model_pool.add_samples(samples)
 
         mean_rollout_length = sum(steps_added) / self._rollout_batch_size
         rollout_stats = {'mean_rollout_length': mean_rollout_length}
@@ -502,31 +518,6 @@ class MBPO(RLAlgorithm):
         ))
 
         return rollout_stats
-
-    # TODO: merge with above
-    def _mppi_optimus_control(self, acts, total_reward, lambda_=1.0):
-        #alpha = np.exp(-(1/lambda_) * (total_cost - min(total_cost)))
-        alpha = np.exp(1/lambda_ * (total_reward - max(total_reward)))
-
-        #alpha = np.exp(-(1/lambda_) * (total_cost + Q)) * pi_ / pi_v  # ref: MPQ
-
-        # blend actions accross all traj in batch
-        omega = alpha / (np.sum(alpha) + 1e-6)
-        u = np.sum((omega.squeeze() * acts.T).T, axis=0)
-
-        # NOISE stuff
-        #u_delta = np.clip(u_delta, -self.uclip, self.uclip)
-        #lr = 1  # TODO: set learning rate?
-        #self.U += lr * u_delta
-        #action = self.U[:,0].squeeze()  # best action
-        #self.U = np.roll(self.U, -1, axis=1)  # shift all elements to the left
-
-        ## take actions in sequence and add to q
-        #for act in u:
-        #    self.action_q.put(act)
-
-        return u
-
 
     def _visualize_model(self, env, timestep):
         ## save env state
@@ -802,14 +793,14 @@ class MBPO(RLAlgorithm):
     def _init_training(self):
         self._update_target(tau=1.0)
 
-    def _init_mppi(self, hl=0.4, horiz=15, rollouts=40, noise_mu=0., noise_sigma=0.5, uclip=1.4, lambda_=1.0):
+    def _init_mppi(self, hl=0.4, horiz=15, rollouts=40, noise_mu=0., noise_sigma=0.5, uclip=1.4, lambda_=1.0, repeats=50):
         action_len = self._action_shape[0]
         obs_len = self._observation_shape[0]
-        #self.U = np.random.uniform(low=-hl, high=hl, size=(horiz, action_len))
-        self.noise_mu = noise_mu
-        self.noise_sigma = noise_sigma
+        self.repeats = repeats
+        self.U = np.random.uniform(low=-hl, high=hl, size=(self._rollout_batch_size*repeats, horiz, action_len))
+        self.noise = np.random.normal(loc=noise_mu, scale=noise_sigma, size=(self._rollout_batch_size*repeats, horiz, action_len))
         self.uclip = uclip
-        self.action_q = Queue()
+        #self.action_q = Queue()
 
         def dynamics(state, action):
             obs = state.cpu().numpy()

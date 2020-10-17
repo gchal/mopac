@@ -23,7 +23,7 @@ params = {
 
         'model_train_freq': 250,
         'model_retain_epochs': 1,
-        'rollout_batch_size': 996,
+        'rollout_batch_size': 9992,
         'deterministic': False,
         'num_networks': 7,
         'num_elites': 5,
