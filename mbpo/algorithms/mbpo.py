@@ -67,6 +67,7 @@ class MBPO(RLAlgorithm):
             store_extra_policy_info=False,
 
             mopac=False,
+            valuefunc=False,
 
             deterministic=False,
             model_train_freq=250,
@@ -120,6 +121,7 @@ class MBPO(RLAlgorithm):
         # self._model_pool = SimpleReplayPool(pool._observation_space, pool._action_space, self._model_pool_size)
 
         self._mopac = mopac
+        self._valuefunc = valuefunc
 
         self._model_retain_epochs = model_retain_epochs
 
@@ -248,7 +250,7 @@ class MBPO(RLAlgorithm):
                     
                     self._set_rollout_length()
                     self._reallocate_model_pool()
-                    model_rollout_metrics = self._rollout_model(mopac=self._mopac, deterministic=self._deterministic)
+                    model_rollout_metrics = self._rollout_model(mopac=self._mopac, valuefunc=self._valuefunc, deterministic=self._deterministic)
                     model_metrics.update(model_rollout_metrics)
 
                     gt.stamp('epoch_rollout_model')
@@ -489,13 +491,16 @@ class MBPO(RLAlgorithm):
                 self.U[r] += 1 * u_delta
                 self.U[r] = np.clip(self.U[r], -self.uclip, self.uclip)
 
-                # best action for pool
-                action = self.U[l][0].squeeze()  
-                obs_init = x_obs[l][0]
-                next_obs, rew, term, info = self.fake_env.step(obs_init, action, 1, **kwargs)
+                # trajectory actions to pool
+                cumreward = np.max(s)
+                for act, obs in zip(self.U[l], x_obs[l]):
+                    next_obs, rew, term, info = self.fake_env.step(obs, act, 1, **kwargs)
 
-                sample = {'observations': obs_init, 'actions': action, 'next_observations': next_obs, 'rewards': rew, 'terminals': term, 'cumrewards': np.max(s)}
-                self._model_pool.add_sample(sample)
+                    sample = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term, 'cumrewards': cumreward}
+                    self._model_pool.add_sample(sample)
+
+                    # cum reward decreases for next step
+                    cumreward -= rew
 
                 # shift all elements to the left along horizon (for next env step)
                 self.U[r] = np.roll(self.U[r], -1, axis=1)

@@ -20,16 +20,17 @@ params = {
         'reward_scale': 1.00,
 
         'mopac': True,
+        'valuefunc': True,
 
         'model_train_freq': 250,
         'model_retain_epochs': 1,
-        'rollout_batch_size': 9992,
+        'rollout_batch_size': 9987,
         'deterministic': False,
         'num_networks': 7,
         'num_elites': 5,
         'target_entropy': -3,
         'max_model_t': None,
         'rollout_schedule': [5, 100, 5, 15],
-        'ratio_schedule': [5, 100, 0.5, 0.5],
+        'ratio_schedule': [0, 20, 0.95, 0.05],
     }
 }
