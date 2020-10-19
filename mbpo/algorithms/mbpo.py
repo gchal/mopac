@@ -433,6 +433,8 @@ class MBPO(RLAlgorithm):
             x_total_reward = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
             #x_term = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
 
+            x_discounts = np.array([[gamma**t] for t in range(self._rollout_length)])
+
         if experimental:
             act = np.array([self.mpc.command(torch.tensor(o, dtype=torch.double)) for o in obs])
 
@@ -495,6 +497,9 @@ class MBPO(RLAlgorithm):
                 obs = x_obs[l]
                 act = self.U[l][:obs.shape[0]]
                 next_obs, rew, term, info = self.fake_env.step(obs, act, 1, **kwargs)
+                # gamma decay on rewards
+                assert x_discounts.shape == rew.shape
+                rew *= x_discounts
 
                 # cum reward is potential reward, it decreases with every step in trajectory
                 # for last step the cum reward becomes the reward of just that step
