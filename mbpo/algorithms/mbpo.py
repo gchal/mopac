@@ -428,10 +428,10 @@ class MBPO(RLAlgorithm):
             obs = np.repeat(obs, self.repeats, axis=0)
 
             x_obs = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, *self._observation_shape))
-            x_next_obs = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, *self._observation_shape))
-            x_acts = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, self._action_shape[0]))
+            #x_next_obs = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, *self._observation_shape))
+            #x_acts = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, self._action_shape[0]))
             x_total_reward = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
-            x_term = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
+            #x_term = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
 
         if experimental:
             act = np.array([self.mpc.command(torch.tensor(o, dtype=torch.double)) for o in obs])
@@ -450,7 +450,7 @@ class MBPO(RLAlgorithm):
                 else:
                     act = self._policy.actions_np(obs)
                 
-                next_obs, rew, term, info = self.fake_env.step(obs, act, self.repeats, **kwargs)
+                next_obs, rew, term, info = self.fake_env.step(obs, act, self.repeats if mopac else 1, **kwargs)
                 steps_added.append(len(obs))
 
                 if mopac:
@@ -459,12 +459,12 @@ class MBPO(RLAlgorithm):
                     if valuefunc:
                         x_total_reward[:,t] += self._Vs.predict([obs])
 
-                    x_term[:,t] = term
-                    x_acts[:,t] = act
+                    #x_term[:,t] = term
+                    #x_acts[:,t] = act
                     x_obs[:,t] = obs
-                    x_next_obs[:,t] = next_obs
+                    #x_next_obs[:,t] = next_obs
                 else:
-                    samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}
+                    samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term, 'cumrewards': rew}
                     self._model_pool.add_samples(samples)
 
                 nonterm_mask = ~term.squeeze(-1)
@@ -491,16 +491,19 @@ class MBPO(RLAlgorithm):
                 self.U[r] += 1 * u_delta
                 self.U[r] = np.clip(self.U[r], -self.uclip, self.uclip)
 
-                # trajectory actions to pool
-                cumreward = np.max(s)
-                for act, obs in zip(self.U[l], x_obs[l]):
-                    next_obs, rew, term, info = self.fake_env.step(obs, act, 1, **kwargs)
+                # simulate trajectory for new control action, based on observation belonging to initial action
+                obs = x_obs[l]
+                act = self.U[l][:obs.shape[0]]
+                next_obs, rew, term, info = self.fake_env.step(obs, act, 1, **kwargs)
 
-                    sample = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term, 'cumrewards': cumreward}
-                    self._model_pool.add_sample(sample)
+                # cum reward is potential reward, it decreases with every step in trajectory
+                # for last step the cum reward becomes the reward of just that step
+                # ex.: rew=(1,2,3,4,5) -> cumreward=(15,14,12,9,5)
+                cumrewards = np.flip(np.cumsum(np.flip(rew), axis=0))
 
-                    # cum reward decreases for next step
-                    cumreward -= rew
+                # add to pool
+                samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term, 'cumrewards': cumrewards}
+                self._model_pool.add_samples(samples)
 
                 # shift all elements to the left along horizon (for next env step)
                 self.U[r] = np.roll(self.U[r], -1, axis=1)
