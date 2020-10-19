@@ -899,10 +899,20 @@ class MBPO(RLAlgorithm):
              self.global_step),
             feed_dict)
 
+        (V_values, V_losses, alpha, global_step) = self._session.run(
+            (self._V_values,
+             self._V_losses,
+             self._alpha,
+             self.global_step),
+            feed_dict)
+
         diagnostics = OrderedDict({
             'Q-avg': np.mean(Q_values),
             'Q-std': np.std(Q_values),
             'Q_loss': np.mean(Q_losses),
+            'V-avg': np.mean(V_values),
+            'V-std': np.std(V_values),
+            'V_loss': np.mean(V_losses),
             'alpha': alpha,
         })
 
