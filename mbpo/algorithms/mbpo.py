@@ -474,7 +474,6 @@ class MBPO(RLAlgorithm):
                 obs = next_obs if mopac else next_obs[nonterm_mask]  # making changes the shape of the array!
 
         if mopac:
-            # TODO: use np arrays right away
             x_opt_acts = np.zeros((self._rollout_batch_size, self._rollout_length, self._action_shape[0]))
             x_opt_obs = np.zeros((self._rollout_batch_size, *self._observation_shape))
             #x_discounts = np.array([[gamma**t] for t in range(self._rollout_length)])
