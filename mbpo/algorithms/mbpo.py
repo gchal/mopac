@@ -415,6 +415,7 @@ class MBPO(RLAlgorithm):
         model_metrics = self._model.train(train_inputs, train_outputs, **kwargs)
         return model_metrics
 
+    # TODO: refactor, extract functions
     def _rollout_model(self, gamma=0.9, lambda_=1.0, mopac=False, experimental=False, valuefunc=False, **kwargs):
         print('[ Model Rollout ] Starting | Epoch: {} | Rollout length: {} | Batch size: {}'.format(
             self._epoch, self._rollout_length, self._rollout_batch_size
@@ -428,9 +429,7 @@ class MBPO(RLAlgorithm):
             obs = np.repeat(obs, self.repeats, axis=0)
 
             x_obs = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, *self._observation_shape))
-            #x_next_obs = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, *self._observation_shape))
             x_total_reward = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
-            #x_term = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
 
         if experimental:
             act = np.array([self.mpc.command(torch.tensor(o, dtype=torch.double)) for o in obs])
@@ -442,26 +441,27 @@ class MBPO(RLAlgorithm):
         else:
             for t in range(self._rollout_length):
                 if mopac:
+                    # first action from control sequence
                     act = self.U[:,t]
+
                     # add noise and clip
                     act += self.noise[:,t]
                     act = np.clip(act, -self.uclip, self.uclip)
                 else:
                     act = self._policy.actions_np(obs)
                 
+                # step model
+                # passing repeat parameter influences model selectioon
                 next_obs, rew, term, info = self.fake_env.step(obs, act, self.repeats if mopac else 1, **kwargs)
                 steps_added.append(len(obs))
 
                 if mopac:
+                    # store reward (incl gamma decay) and observation
                     x_total_reward[:,t] = (gamma**t) * rew
-
                     if valuefunc:
                         x_total_reward[:,t] += self._Vs.predict([obs])
 
-                    #x_term[:,t] = term
-                    #x_acts[:,t] = act
                     x_obs[:,t] = obs
-                    #x_next_obs[:,t] = next_obs
                 else:
                     samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term, 'cumrewards': rew}
                     self._model_pool.add_samples(samples)
@@ -475,41 +475,38 @@ class MBPO(RLAlgorithm):
 
         if mopac:
             # TODO: use np arrays right away
-            x_opt_acts = []
-            x_opt_obs = []
-            #x_opt_acts = np.zeros((self._rollout_batch_size, self._rollout_length, self._action_shape[0]))
-            #x_opt_obs = np.zeros((self._rollout_batch_size, *self._observation_shape))
+            x_opt_acts = np.zeros((self._rollout_batch_size, self._rollout_length, self._action_shape[0]))
+            x_opt_obs = np.zeros((self._rollout_batch_size, *self._observation_shape))
             #x_discounts = np.array([[gamma**t] for t in range(self._rollout_length)])
 
             # mppi optimization
             for l in range(0, self._rollout_batch_size*self.repeats, self.repeats):
+                # selectors
+                i = int(l/self.repeats)
                 r = range(l, l+self.repeats)
-                s = np.sum(x_total_reward[r], axis=1)  # cum reward of rollout
+
+                # cum reward of rollout
+                s = np.sum(x_total_reward[r], axis=1)
 
                 # normalize cum reward
                 alpha = np.exp(1/lambda_ * (s - np.max(s)))
                 omega = alpha / (np.sum(alpha) + 1e-6)
 
-                # control noise
+                # compute control offset (most important part in mppi)
                 u_delta = np.sum((omega.squeeze() * self.noise[r].T).T, axis=0)
 
                 # tweak control (duplicated accross range)
                 self.U[r] += 1 * u_delta
                 self.U[r] = np.clip(self.U[r], -self.uclip, self.uclip)
 
-                # observation belonging to initial action
-                obs = x_obs[l][0]  # initial observation
-                acts = self.U[l][:self._rollout_length]  # truncate
-                x_opt_obs += [obs]
-                x_opt_acts += [acts]
+                # store first initial observation (and action sequence) belonging to action sequence
+                x_opt_obs[i] = x_obs[l][0]  # initial observation
+                x_opt_acts[i] = self.U[l][:self._rollout_length]  # truncate
 
                 # shift all elements to the left along horizon (for next env step)
                 self.U[r] = np.roll(self.U[r], -1, axis=1)
 
-            x_opt_acts = np.asarray(x_opt_acts)
-            x_opt_obs = np.asarray(x_opt_obs)
-
-            # rollout trajectory for new control action sequence
+            # rollout trajectories using mppi control action sequences to generate samples
             samples = []
             cumrewards = 0
             obs = x_opt_obs  # inital obs from first rollout
@@ -517,23 +514,25 @@ class MBPO(RLAlgorithm):
                 act = x_opt_acts[:,t]
                 next_obs, rew, term, info = self.fake_env.step(obs, act, 1, **kwargs)
 
-                # gamma decay on reward
+                # gamma decay on reward, update cum reward
                 rew *= (gamma**t)
                 cumrewards += rew
 
+                # store sample
                 samples += [{'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}]
 
                 obs = next_obs
 
-            # cum reward is potential reward, it decreases with every step in trajectory
-            # for last step the cum reward becomes the reward of just that step
-            # ex.: rew=(1,2,3,4,5) -> cumrewards=(15,14,12,9,5)
+            # add samples to pool, together with cum reward
             for s in samples:
+                # cum reward is potential reward, it decreases with every step in trajectory
+                # for last step the cum reward becomes the reward of just that step
+                # ex.: rew=(1,2,3,4,5) -> cumrewards=(15,14,12,9,5)
                 s.update({'cumrewards': cumrewards})
+                cumrewards -= s['rewards']
+
                 # add to pool
                 self._model_pool.add_samples(s)
-
-                cumrewards -= s['rewards']
 
         mean_rollout_length = sum(steps_added) / self._rollout_batch_size
         rollout_stats = {'mean_rollout_length': mean_rollout_length}
