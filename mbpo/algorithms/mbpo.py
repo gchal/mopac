@@ -434,8 +434,8 @@ class MBPO(RLAlgorithm):
             x_obs = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, *self._observation_shape))
             x_total_reward = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
 
-            # fix model inds
-            model_inds = self._model.random_inds(self._rollout_batch_size*self.repeats)
+            # fix model inds across rollouts and initial state repeats
+            model_inds = self._model.random_inds(int(batch_size/self.repeats)).repeat(self.repeats)
 
         # rollouts
         for t in range(self._rollout_length):
@@ -449,7 +449,7 @@ class MBPO(RLAlgorithm):
             else:
                 act = self._policy.actions_np(obs)
 
-                # new random inds on each step
+                # new random model inds on each step
                 model_inds = self._model.random_inds(self._rollout_batch_size)
             
             next_obs, rew, term, info = self.fake_env.step(obs, act, model_inds,
@@ -496,7 +496,7 @@ class MBPO(RLAlgorithm):
                 # compute control offset (most important part in mppi)
                 u_delta = np.sum((omega.squeeze() * self.noise[r].T).T, axis=0)
 
-                # tweak control (duplicated accross range)
+                # tweak control (duplicated across range)
                 self.U[r] += 1 * u_delta
                 self.U[r] = np.clip(self.U[r], -self.uclip, self.uclip)
 
