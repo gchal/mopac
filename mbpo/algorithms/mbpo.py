@@ -435,7 +435,7 @@ class MBPO(RLAlgorithm):
             x_total_reward = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
 
             # fix model inds across rollouts and initial state repeats
-            model_inds = self._model.random_inds(int(batch_size/self.repeats)).repeat(self.repeats)
+            model_inds = self._model.random_inds(self._rollout_batch_size).repeat(self.repeats)
 
         # rollouts
         for t in range(self._rollout_length):
