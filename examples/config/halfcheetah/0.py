@@ -5,7 +5,7 @@ params = {
     'task': 'v2',
 
     'log_dir': '/work/scratch/dn38jyty/ray_mbpo/',
-    'exp_name': 'defaults',
+    'exp_name': 'mopacfixedv2',
 
     'kwargs': {
         'epoch_length': 1000,
@@ -21,16 +21,17 @@ params = {
 
         'mopac': True,
         'valuefunc': True,
+        'deterministic_obs': False,
+        'deterministic_rewards': True,
 
         'model_train_freq': 250,
         'model_retain_epochs': 1,
-        'rollout_batch_size': 9987,
-        'deterministic': False,
+        'rollout_batch_size': 9999,
         'num_networks': 7,
         'num_elites': 5,
         'target_entropy': -3,
         'max_model_t': None,
-        'rollout_schedule': [5, 100, 5, 15],
-        'ratio_schedule': [0, 20, 0.95, 0.05],
+        'rollout_schedule': [0, 80, 5, 15],
+        'ratio_schedule': [0, 80, 0.95, 0.05],
     }
 }

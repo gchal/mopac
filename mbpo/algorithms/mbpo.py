@@ -68,8 +68,9 @@ class MBPO(RLAlgorithm):
 
             mopac=False,
             valuefunc=False,
+            deterministic_obs=False,
+            deterministic_rewards=False,
 
-            deterministic=False,
             model_train_freq=250,
             num_networks=7,
             num_elites=5,
@@ -127,7 +128,8 @@ class MBPO(RLAlgorithm):
 
         self._model_train_freq = model_train_freq
         self._rollout_batch_size = int(rollout_batch_size)
-        self._deterministic = deterministic
+        self._deterministic_obs = deterministic_obs
+        self._deterministic_rewards = deterministic_rewards
         #self._real_ratio = real_ratio
 
         self._log_dir = os.getcwd()
@@ -250,7 +252,8 @@ class MBPO(RLAlgorithm):
                     
                     self._set_rollout_length()
                     self._reallocate_model_pool()
-                    model_rollout_metrics = self._rollout_model(mopac=self._mopac, valuefunc=self._valuefunc, deterministic=self._deterministic)
+                    model_rollout_metrics = self._rollout_model(gamma=self._discount, mopac=self._mopac, valuefunc=self._valuefunc,
+                                                                deterministic_obs=self._deterministic_obs, deterministic_rewards=self._deterministic_rewards)
                     model_metrics.update(model_rollout_metrics)
 
                     gt.stamp('epoch_rollout_model')
@@ -416,7 +419,7 @@ class MBPO(RLAlgorithm):
         return model_metrics
 
     # TODO: refactor, extract functions
-    def _rollout_model(self, gamma=0.9, lambda_=1.0, mopac=False, experimental=False, valuefunc=False, **kwargs):
+    def _rollout_model(self, gamma=0.9, lambda_=1.0, mopac=False, valuefunc=False, deterministic_obs=False, deterministic_rewards=False):
         print('[ Model Rollout ] Starting | Epoch: {} | Rollout length: {} | Batch size: {}'.format(
             self._epoch, self._rollout_length, self._rollout_batch_size
         ))
@@ -431,47 +434,46 @@ class MBPO(RLAlgorithm):
             x_obs = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, *self._observation_shape))
             x_total_reward = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
 
-        if experimental:
-            act = np.array([self.mpc.command(torch.tensor(o, dtype=torch.double)) for o in obs])
+            # fix model inds
+            model_inds = self._model.random_inds(self._rollout_batch_size*self.repeats)
 
-            next_obs, rew, term, info = self.fake_env.step(obs, act, **kwargs)
+        # rollouts
+        for t in range(self._rollout_length):
+            if mopac:
+                # first action from control sequence
+                act = self.U[:,t]
+
+                # add noise and clip
+                act += self.noise[:,t]
+                act = np.clip(act, -self.uclip, self.uclip)
+            else:
+                act = self._policy.actions_np(obs)
+
+                # new random inds on each step
+                model_inds = self._model.random_inds(self._rollout_batch_size)
+            
+            next_obs, rew, term, info = self.fake_env.step(obs, act, model_inds,
+                                                            deterministic_obs=deterministic_obs,
+                                                            deterministic_rewards=deterministic_rewards)
             steps_added.append(len(obs))
-            samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}
-            self._model_pool.add_samples(samples)
-        else:
-            for t in range(self._rollout_length):
-                if mopac:
-                    # first action from control sequence
-                    act = self.U[:,t]
 
-                    # add noise and clip
-                    act += self.noise[:,t]
-                    act = np.clip(act, -self.uclip, self.uclip)
-                else:
-                    act = self._policy.actions_np(obs)
-                
-                # step model
-                # passing repeat parameter influences model selectioon
-                next_obs, rew, term, info = self.fake_env.step(obs, act, self.repeats if mopac else 1, **kwargs)
-                steps_added.append(len(obs))
+            if mopac:
+                # store reward (incl gamma decay) and observation
+                x_total_reward[:,t] = (gamma**t) * rew
+                if valuefunc:
+                    x_total_reward[:,t] += self._Vs.predict([obs])
 
-                if mopac:
-                    # store reward (incl gamma decay) and observation
-                    x_total_reward[:,t] = (gamma**t) * rew
-                    if valuefunc:
-                        x_total_reward[:,t] += self._Vs.predict([obs])
+                x_obs[:,t] = obs
+            else:
+                samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term, 'cumrewards': rew}
+                self._model_pool.add_samples(samples)
 
-                    x_obs[:,t] = obs
-                else:
-                    samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term, 'cumrewards': rew}
-                    self._model_pool.add_samples(samples)
+            nonterm_mask = ~term.squeeze(-1)
+            if nonterm_mask.sum() == 0:
+                print('[ Model Rollout ] Breaking early: {} | {} / {}'.format(t, nonterm_mask.sum(), nonterm_mask.shape))
+                break
 
-                nonterm_mask = ~term.squeeze(-1)
-                if nonterm_mask.sum() == 0:
-                    print('[ Model Rollout ] Breaking early: {} | {} / {}'.format(t, nonterm_mask.sum(), nonterm_mask.shape))
-                    break
-
-                obs = next_obs if mopac else next_obs[nonterm_mask]  # making changes the shape of the array!
+            obs = next_obs if mopac else next_obs[nonterm_mask]  # making changes the shape of the array!
 
         if mopac:
             x_opt_acts = np.zeros((self._rollout_batch_size, self._rollout_length, self._action_shape[0]))
@@ -506,12 +508,17 @@ class MBPO(RLAlgorithm):
                 self.U[r] = np.roll(self.U[r], -1, axis=1)
 
             # rollout trajectories using mppi control action sequences to generate samples
+            # fix model inds
+            model_inds = self._model.random_inds(self._rollout_batch_size)
+
             samples = []
             cumrewards = 0
             obs = x_opt_obs  # inital obs from first rollout
             for t in range(self._rollout_length):
                 act = x_opt_acts[:,t]
-                next_obs, rew, term, info = self.fake_env.step(obs, act, 1, **kwargs)
+                next_obs, rew, term, info = self.fake_env.step(obs, act, model_inds,
+                                                                deterministic_obs=deterministic_obs,
+                                                                deterministic_rewards=deterministic_rewards)
 
                 # gamma decay on reward, update cum reward
                 rew *= (gamma**t)
@@ -823,17 +830,6 @@ class MBPO(RLAlgorithm):
         self.noise = np.random.normal(loc=noise_mu, scale=noise_sigma, size=(self._rollout_batch_size*repeats, horiz, action_len))
         self.uclip = uclip
         #self.action_q = Queue()
-
-        def dynamics(state, action):
-            obs = state.cpu().numpy()
-            act = action.cpu().numpy()
-            next_obs, rew, term, info = self.fake_env.step(obs, act, deterministic=False)
-
-            return next_obs, rew
-
-        self.mpc = mppi.MPPI(dynamics, obs_len, action_len, noise_sigma,
-                            num_samples=rollouts, horizon=horiz, lambda_=lambda_,
-                            u_min=-uclip, u_max=+uclip)
 
     def _update_target(self, tau=None):
         tau = tau or self._tau

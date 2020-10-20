@@ -30,7 +30,7 @@ class FakeEnv:
 
         return log_prob, stds
 
-    def step(self, obs, act, repeats=1, deterministic=False):
+    def step(self, obs, act, model_inds, deterministic_obs=False, deterministic_rewards=False):
         assert len(obs.shape) == len(act.shape)
         if len(obs.shape) == 1:
             obs = obs[None]
@@ -41,31 +41,48 @@ class FakeEnv:
 
         inputs = np.concatenate((obs, act), axis=-1)
         ensemble_model_means, ensemble_model_vars = self.model.predict(inputs, factored=True)
-        ensemble_model_means[:,:,1:] += obs
-        ensemble_model_stds = np.sqrt(ensemble_model_vars)
 
-        if deterministic:
-            ensemble_samples = ensemble_model_means
+        ensemble_next_obs_means = ensemble_model_means[:,:,1:] + obs
+        ensemble_next_obs_stds = np.sqrt(ensemble_model_vars[:,:,1:])
+
+        ensemble_rewards_means = ensemble_model_means[:,:,:1]
+        ensemble_rewards_stds = np.sqrt(ensemble_model_vars[:,:,:1])
+
+        if deterministic_obs:
+            ensemble_samples_next_obs = ensemble_next_obs_means
         else:
-            ensemble_samples = ensemble_model_means + np.random.normal(size=ensemble_model_means.shape) * ensemble_model_stds
+            ensemble_samples_next_obs = ensemble_next_obs_means + np.random.normal(size=ensemble_next_obs_means.shape) * ensemble_next_obs_stds
+
+        if deterministic_rewards:
+            ensemble_samples_rewards = ensemble_rewards_means
+        else:
+            ensemble_samples_rewards = ensemble_rewards_means + np.random.normal(size=ensemble_rewards_means.shape) * ensemble_rewards_stds
 
         #### choose one model from ensemble
         num_models, batch_size, _ = ensemble_model_means.shape
-        model_inds = self.model.random_inds(int(batch_size/repeats)).repeat(repeats)
         batch_inds = np.arange(0, batch_size)
-        samples = ensemble_samples[model_inds, batch_inds]
-        model_means = ensemble_model_means[model_inds, batch_inds]
-        model_stds = ensemble_model_stds[model_inds, batch_inds]
+
+        next_obs = ensemble_samples_next_obs[model_inds, batch_inds]
+        next_obs_means = ensemble_next_obs_means[model_inds, batch_inds]
+        next_obs_stds = ensemble_next_obs_stds[model_inds, batch_inds]
+
+        rewards = ensemble_samples_rewards[model_inds, batch_inds]
+        rewards_means = ensemble_rewards_means[model_inds, batch_inds]
+        rewards_stds = ensemble_rewards_stds[model_inds, batch_inds]
         ####
 
-        log_prob, dev = self._get_logprob(samples, ensemble_model_means, ensemble_model_vars)
+        log_prob_next_obs, dev_next_obs = self._get_logprob(next_obs, ensemble_next_obs_means, ensemble_next_obs_stds)
+        log_prob_rewards, dev_rewards = self._get_logprob(rewards, ensemble_rewards_means, ensemble_rewards_stds)
 
-        rewards, next_obs = samples[:,:1], samples[:,1:]
+        log_prob = np.concatenate((log_prob_rewards, log_prob_next_obs), axis=-1)
+        dev = np.concatenate((dev_rewards, dev_next_obs), axis=-1)
+
         terminals = self.config.termination_fn(obs, act, next_obs)
 
-        batch_size = model_means.shape[0]
-        return_means = np.concatenate((model_means[:,:1], terminals, model_means[:,1:]), axis=-1)
-        return_stds = np.concatenate((model_stds[:,:1], np.zeros((batch_size,1)), model_stds[:,1:]), axis=-1)
+        #assert batch_size == next_obs_means.shape[0]
+        #batch_size = next_obs_means.shape[0]
+        return_means = np.concatenate((rewards_means, terminals, next_obs_means), axis=-1)
+        return_stds = np.concatenate((rewards_stds, np.zeros((batch_size,1)), next_obs_stds), axis=-1)
 
         if return_single:
             next_obs = next_obs[0]
