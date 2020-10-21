@@ -434,8 +434,10 @@ class MBPO(RLAlgorithm):
             x_obs = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, *self._observation_shape))
             x_total_reward = np.zeros((self._rollout_batch_size*self.repeats, self._rollout_length, 1))
 
-            # fix model inds across rollouts and initial state repeats
-            model_inds = self._model.random_inds(self._rollout_batch_size).repeat(self.repeats)
+            # fix model inds across rollouts
+            # TODO: and initial states?
+            #model_inds = self._model.random_inds(self._rollout_batch_size).repeat(self.repeats)
+            model_inds = self._model.random_inds(self._rollout_batch_size*self.repeats)
 
         # rollouts
         for t in range(self._rollout_length):
@@ -460,8 +462,6 @@ class MBPO(RLAlgorithm):
             if mopac:
                 # store reward (incl gamma decay) and observation
                 x_total_reward[:,t] = (gamma**t) * rew
-                if valuefunc:
-                    x_total_reward[:,t] += self._Vs.predict([obs])
 
                 x_obs[:,t] = obs
             else:
@@ -476,6 +476,10 @@ class MBPO(RLAlgorithm):
             obs = next_obs if mopac else next_obs[nonterm_mask]  # making changes the shape of the array!
 
         if mopac:
+            # VF on final state
+            if valuefunc:
+                x_total_reward[:,t] += self._Vs.predict([obs])
+
             x_opt_acts = np.zeros((self._rollout_batch_size, self._rollout_length, self._action_shape[0]))
             x_opt_obs = np.zeros((self._rollout_batch_size, *self._observation_shape))
             #x_discounts = np.array([[gamma**t] for t in range(self._rollout_length)])
@@ -822,7 +826,7 @@ class MBPO(RLAlgorithm):
     def _init_training(self):
         self._update_target(tau=1.0)
 
-    def _init_mppi(self, hl=0.4, horiz=15, rollouts=40, noise_mu=0., noise_sigma=0.5, uclip=1.4, lambda_=1.0, repeats=50):
+    def _init_mppi(self, hl=0.4, horiz=15, noise_mu=0., noise_sigma=0.5, uclip=1.4, lambda_=1.0, repeats=50):
         action_len = self._action_shape[0]
         obs_len = self._observation_shape[0]
         self.repeats = repeats
@@ -830,6 +834,9 @@ class MBPO(RLAlgorithm):
         self.noise = np.random.normal(loc=noise_mu, scale=noise_sigma, size=(self._rollout_batch_size*repeats, horiz, action_len))
         self.uclip = uclip
         #self.action_q = Queue()
+
+    def _reset_mppi(self, horiz):
+        self._init_mppi(horiz=horiz)
 
     def _update_target(self, tau=None):
         tau = tau or self._tau
