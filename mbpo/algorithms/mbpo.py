@@ -440,7 +440,9 @@ class MBPO(RLAlgorithm):
             model_inds = self._model.random_inds(self._rollout_batch_size*self.repeats)
 
         # rollouts
-        for t in range(self._rollout_length):
+        # in mopac last step is replaced by value func
+        horiz = self._rollout_length-1 if valuefunc and mopac else self._rollout_length
+        for t in range(horiz):
             if mopac:
                 # first action from control sequence
                 act = self.U[:,t]
@@ -476,9 +478,17 @@ class MBPO(RLAlgorithm):
             obs = next_obs if mopac else next_obs[nonterm_mask]  # making changes the shape of the array!
 
         if mopac:
-            # VF on final state
+            # VF on final state, replaces terminal reward
             if valuefunc:
-                x_total_reward[:,t] += self._Vs.predict([obs])
+                # previous next obs becomes last obs for storage
+                x_obs[:,-1] = next_obs
+                # predict terminal reward (normalized dsr)
+                x_total_reward[:,-1] = self._Vs.predict([x_obs[:,-1]])
+
+                #x_total_reward[:,-1] = self._Vs.predict([x_obs[:,-1]])
+                #next_Qs_values = tuple(Q.predict([obs, next_actions])
+                #    for Q in self._Q_targets)
+                #min_next_Q = tf.reduce_min(next_Qs_values, axis=0)
 
             x_opt_acts = np.zeros((self._rollout_batch_size, self._rollout_length, self._action_shape[0]))
             x_opt_obs = np.zeros((self._rollout_batch_size, *self._observation_shape))
@@ -516,7 +526,6 @@ class MBPO(RLAlgorithm):
             model_inds = self._model.random_inds(self._rollout_batch_size)
 
             samples = []
-            cumrewards = 0
             obs = x_opt_obs  # inital obs from first rollout
             for t in range(self._rollout_length):
                 act = x_opt_acts[:,t]
@@ -526,20 +535,25 @@ class MBPO(RLAlgorithm):
 
                 # gamma decay on reward, update cum reward
                 rew *= (gamma**t)
-                cumrewards += rew
 
                 # store sample
                 samples += [{'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}]
 
                 obs = next_obs
 
+            # cum rewards
+            # cum reward is potential reward, it decreases with every step in trajectory
+            # for last step the cum reward becomes the reward of just that step
+            # ex.: rew=(1,2,3,4,5) -> cumrewards=(15,14,12,9,5)
+            rews = np.array([s['rewards'] for s in samples])
+            cumrewards =  np.flip(np.cumsum(np.flip(rews), axis=0))
+
+            # normalize
+            cumrewards /= self._rollout_length
+
             # add samples to pool, together with cum reward
-            for s in samples:
-                # cum reward is potential reward, it decreases with every step in trajectory
-                # for last step the cum reward becomes the reward of just that step
-                # ex.: rew=(1,2,3,4,5) -> cumrewards=(15,14,12,9,5)
-                s.update({'cumrewards': cumrewards})
-                cumrewards -= s['rewards']
+            for s, cw in zip(samples, cumrewards):
+                s.update({'cumrewards': cw})
 
                 # add to pool
                 self._model_pool.add_samples(s)
