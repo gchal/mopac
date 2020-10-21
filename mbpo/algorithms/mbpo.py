@@ -24,11 +24,6 @@ from mbpo.utils.visualization import visualize_policy
 from mbpo.utils.logging import Progress
 import mbpo.utils.filesystem as filesystem
 
-import torch
-from pytorch_mppi import mppi
-
-import ray
-
 
 def td_target(reward, discount, next_value):
     return reward + discount * next_value
