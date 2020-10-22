@@ -1,4 +1,4 @@
-name: mbpo
+name: mopac
 channels:
   - conda-canary
   - conda-forge
@@ -117,7 +117,7 @@ dependencies:
     - more-itertools==4.3.0
     - mujoco-py==2.0.2.10
     - multipledispatch==0.6.0
-    - multiworld==0.0.0
+    - git+https://github.com/vitchyr/multiworld.git@d76b3dae2e8cbca02924f93d6cc0239c552f6408
     - nbformat==5.0.7
     - networkx==2.2
     - numpy==1.16.0
