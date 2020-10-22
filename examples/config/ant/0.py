@@ -29,7 +29,6 @@ params = {
 
         'model_train_freq': 250,
         'model_retain_epochs': 1,
-        'deterministic': False,
         'num_networks': 7,
         'num_elites': 5,
         'target_entropy': -4,
