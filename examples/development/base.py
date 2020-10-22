@@ -123,7 +123,7 @@ ALGORITHM_PARAMS_PER_DOMAIN = {
 ENVIRONMENT_PARAMS = {
 }
 
-NUM_CHECKPOINTS = 100
+NUM_CHECKPOINTS = 200
 
 
 def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params):
