@@ -17,10 +17,10 @@ pip install -e .
 ```
 
 ## Usage
-Configuration files can be found in [`examples/config/`](examples/config).
+Configuration files can be found in [`mopac/examples/config/`](mopac/examples/config).
 
 ```
-mopac run_local examples.development --config=examples.config.halfcheetah.0 --gpus=1 --trial-gpus=1
+mopac run_local mopac.examples.development --config=mopac.examples.config.halfcheetah.0 --gpus=1 --trial-gpus=1
 ```
 
 Currently only running locally is supported.
@@ -34,17 +34,17 @@ This codebase contains [viskit](https://github.com/vitchyr/viskit) as a submodul
 ```
 viskit ~/ray_mopac --port 6008
 ```
-assuming you used the default [`log_dir`](examples/config/halfcheetah/0.py#L7).
+assuming you used the default [`log_dir`](mopac/examples/config/halfcheetah/0.py#L7).
 
 #### Hyperparameters
 
-The rollout length schedule is defined by a length-4 list in a [config file](examples/config/halfcheetah/0.py#L31). The format is `[start_epoch, end_epoch, start_length, end_length]`, so the following:
+The rollout length schedule is defined by a length-4 list in a [config file](mopac/examples/config/halfcheetah/0.py#L31). The format is `[start_epoch, end_epoch, start_length, end_length]`, so the following:
 ```
 'rollout_schedule': [20, 100, 1, 5] 
 ```
 corresponds to a model rollout length linearly increasing from 1 to 5 over epochs 20 to 100. 
 
-If you want to speed up training in terms of wall clock time (but possibly make the runs less sample-efficient), you can set a timeout for model training ([`max_model_t`](examples/config/halfcheetah/0.py#L30), in seconds) or train the model less frequently (every [`model_train_freq`](examples/config/halfcheetah/0.py#L22) steps).
+If you want to speed up training in terms of wall clock time (but possibly make the runs less sample-efficient), you can set a timeout for model training ([`max_model_t`](mopac/examples/config/halfcheetah/0.py#L30), in seconds) or train the model less frequently (every [`model_train_freq`](mopac/examples/config/halfcheetah/0.py#L22) steps).
 
 ## Comparing to MOPAC
 If you would like to compare to MOPAC but do not have the resources to re-run all experiments, the learning curves found in Figure 2 of the paper (plus on the Humanoid environment) are available in this [shared folder](https://drive.google.com/drive/folders/1matvC7hPi5al9-5S2uL4GuXfT5rzO9qU?usp=sharing). See `plot.py` for an example of how to read the pickle files with the results.
