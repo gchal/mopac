@@ -13,10 +13,10 @@ import numpy as np
 from tqdm import trange
 from scipy.io import savemat, loadmat
 
-from mbpo.models.utils import get_required_argument, TensorStandardScaler
-from mbpo.models.fc import FC
+from mopac.models.utils import get_required_argument, TensorStandardScaler
+from mopac.models.fc import FC
 
-from mbpo.utils.logging import Progress, Silent
+from mopac.utils.logging import Progress, Silent
 
 np.set_printoptions(precision=5)
 

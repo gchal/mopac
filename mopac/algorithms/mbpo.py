@@ -17,20 +17,20 @@ from tensorflow.python.training import training_util
 from softlearning.algorithms.rl_algorithm import RLAlgorithm
 from softlearning.replay_pools.simple_replay_pool import SimpleReplayPool
 
-from mbpo.models.constructor import construct_model, format_samples_for_training
-from mbpo.models.fake_env import FakeEnv
-from mbpo.utils.writer import Writer
-from mbpo.utils.visualization import visualize_policy
-from mbpo.utils.logging import Progress
-import mbpo.utils.filesystem as filesystem
+from mopac.models.constructor import construct_model, format_samples_for_training
+from mopac.models.fake_env import FakeEnv
+from mopac.utils.writer import Writer
+from mopac.utils.visualization import visualize_policy
+from mopac.utils.logging import Progress
+import mopac.utils.filesystem as filesystem
 
 
 def td_target(reward, discount, next_value):
     return reward + discount * next_value
 
 
-class MBPO(RLAlgorithm):
-    """Model-Based Policy Optimization (MBPO)
+class MOPAC(RLAlgorithm):
+    """Model-Based Policy Optimization (MOPAC)
 
     References
     ----------
@@ -100,7 +100,7 @@ class MBPO(RLAlgorithm):
                 a likelihood ratio based estimator otherwise.
         """
 
-        super(MBPO, self).__init__(**kwargs)
+        super(MOPAC, self).__init__(**kwargs)
 
         obs_dim = np.prod(training_environment.observation_space.shape)
         act_dim = np.prod(training_environment.action_space.shape)
@@ -113,7 +113,7 @@ class MBPO(RLAlgorithm):
         self._max_model_t = max_model_t
 
         # self._model_pool_size = model_pool_size
-        # print('[ MBPO ] Model pool size: {:.2E}'.format(self._model_pool_size))
+        # print('[ MOPAC ] Model pool size: {:.2E}'.format(self._model_pool_size))
         # self._model_pool = SimpleReplayPool(pool._observation_space, pool._action_space, self._model_pool_size)
 
         self._mopac = mopac
@@ -153,7 +153,7 @@ class MBPO(RLAlgorithm):
             -np.prod(self._training_environment.action_space.shape)
             if target_entropy == 'auto'
             else target_entropy)
-        print('[ MBPO ] Target entropy: {}'.format(self._target_entropy))
+        print('[ MOPAC ] Target entropy: {}'.format(self._target_entropy))
 
         self._discount = discount
         self._tau = tau
@@ -241,8 +241,8 @@ class MBPO(RLAlgorithm):
                 self._set_real_ratio()
                 if self._timestep % self._model_train_freq == 0 and self._real_ratio < 1.0:
                     self._training_progress.pause()
-                    print('[ MBPO ] log_dir: {} | ratio: {}'.format(self._log_dir, self._real_ratio))
-                    print('[ MBPO ] Training model at epoch {} | freq {} | timestep {} (total: {}) | epoch train steps: {} (total: {})'.format(
+                    print('[ MOPAC ] log_dir: {} | ratio: {}'.format(self._log_dir, self._real_ratio))
+                    print('[ MOPAC ] Training model at epoch {} | freq {} | timestep {} (total: {}) | epoch train steps: {} (total: {})'.format(
                         self._epoch, self._model_train_freq, self._timestep, self._total_timestep, self._train_steps_this_epoch, self._num_train_steps)
                     )
 
@@ -396,13 +396,13 @@ class MBPO(RLAlgorithm):
         new_pool_size = self._model_retain_epochs * model_steps_per_epoch
 
         if not hasattr(self, '_model_pool'):
-            print('[ MBPO ] Initializing new model pool with size {:.2e}'.format(
+            print('[ MOPAC ] Initializing new model pool with size {:.2e}'.format(
                 new_pool_size
             ))
             self._model_pool = SimpleReplayPool(obs_space, act_space, new_pool_size)
         
         elif self._model_pool._max_size != new_pool_size:
-            print('[ MBPO ] Updating model pool | {:.2e} --> {:.2e}'.format(
+            print('[ MOPAC ] Updating model pool | {:.2e} --> {:.2e}'.format(
                 self._model_pool._max_size, new_pool_size
             ))
             samples = self._model_pool.return_all_samples()

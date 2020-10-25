@@ -2,18 +2,18 @@ from distutils.core import setup
 from setuptools import find_packages
 
 setup(
-    name='mbpo',
+    name='mopac',
     packages=find_packages(),
-    version='0.0.1',
+    version='0.1',
     description='Model-based policy optimization',
     long_description=open('./README.md').read(),
-    author='Michael Janner',
-    author_email='janner@berkeley.edu',
-    url='https://people.eecs.berkeley.edu/~janner/mbpo/',
+    author='',
+    author_email='',
+    url='',
     entry_points={
         'console_scripts': (
-            'mbpo=softlearning.scripts.console_scripts:main',
-            'viskit=mbpo.scripts.console_scripts:main'
+            'mopac=softlearning.scripts.console_scripts:main',
+            'viskit=mopac.scripts.console_scripts:main'
         )
     },
     requires=(),

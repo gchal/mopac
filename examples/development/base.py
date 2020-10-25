@@ -42,8 +42,8 @@ MAX_PATH_LENGTH_PER_DOMAIN = {
 }
 
 ALGORITHM_PARAMS_ADDITIONAL = {
-    'MBPO': {
-        'type': 'MBPO',
+    'MOPAC': {
+        'type': 'MOPAC',
         'kwargs': {
             'reparameterize': REPARAMETERIZE,
             'lr': 3e-4,

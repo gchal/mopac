@@ -19,7 +19,7 @@ from softlearning.value_functions.utils import get_V_function_from_variant
 from softlearning.misc.utils import set_seed, initialize_tf_variables
 from examples.instrument import run_example_local
 
-import mbpo.static
+import mopac.static
 
 class ExperimentRunner(tune.Trainable):
     def _setup(self, variant):
@@ -64,7 +64,7 @@ class ExperimentRunner(tune.Trainable):
 
         #### get termination function
         domain = environment_params['training']['domain']
-        static_fns = mbpo.static[domain.lower()]
+        static_fns = mopac.static[domain.lower()]
         ####
  
         self.algorithm = get_algorithm_from_variant(

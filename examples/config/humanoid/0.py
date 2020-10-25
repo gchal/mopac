@@ -1,10 +1,10 @@
 params = {
-    'type': 'MBPO',
+    'type': 'MOPAC',
     'universe': 'gym',
-    'domain': 'HumanoidTruncatedObs', ## mbpo/env/humanoid.py
+    'domain': 'HumanoidTruncatedObs', ## mopac/env/humanoid.py
     'task': 'v2',
 
-    'log_dir': '~/ray_mbpo/',
+    'log_dir': '~/ray_mopac/',
     'exp_name': 'defaults',
 
     'kwargs': {

@@ -167,5 +167,5 @@ dependencies:
     - uritemplate==3.0.0
     - urllib3==1.24.2
     - werkzeug==0.15.3
-prefix: /work/scratch/dn38jyty/anaconda3/envs/mbpo
+prefix: /work/scratch/dn38jyty/anaconda3/envs/mopac
 

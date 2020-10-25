@@ -1,10 +1,10 @@
 params = {
-    'type': 'MBPO',
+    'type': 'MOPAC',
     'universe': 'gym',
     'domain': 'HalfCheetah',
     'task': 'v2',
 
-    'log_dir': '/work/scratch/dn38jyty/ray_mbpo/',
+    'log_dir': '/work/scratch/dn38jyty/ray_mopac/',
     'exp_name': 'mopacfixedv5policyactanneal',
 
     'kwargs': {

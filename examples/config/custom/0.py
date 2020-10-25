@@ -1,10 +1,10 @@
 params = {
-    'type': 'MBPO',
+    'type': 'MOPAC',
     'universe': TODO,
     'domain': TODO,
     'task': TODO,
 
-    'log_dir': '~/ray_mbpo/',
+    'log_dir': '~/ray_mopac/',
     'exp_name': 'defaults',
 
     'kwargs': {
