@@ -485,7 +485,7 @@ class MBPO(RLAlgorithm):
                 # previous next obs becomes last obs for storage
                 x_obs[:,-1] = next_obs
                 # predict terminal reward (normalized dsr)
-                x_total_reward[:,-1] = self._Vs.predict([x_obs[:,-1]])
+                x_total_reward[:,-1] = self._V_targets.predict([x_obs[:,-1]])
 
                 #x_total_reward[:,-1] = self._Vs.predict([x_obs[:,-1]])
                 #next_Qs_values = tuple(Q.predict([obs, next_actions])
