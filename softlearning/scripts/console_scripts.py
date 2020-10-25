@@ -23,7 +23,7 @@ import logging
 
 import click
 
-from examples.instrument import (
+from mopac.examples.instrument import (
     run_example_dry,
     run_example_local,
     run_example_debug,

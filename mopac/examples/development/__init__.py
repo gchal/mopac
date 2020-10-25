@@ -32,6 +32,6 @@ def get_variant_spec(command_line_args, *args, **kwargs):
     return variant_spec
 
 def get_parser():
-    from examples.utils import get_parser
+    from mopac.examples.utils import get_parser
     parser = get_parser()
     return parser
