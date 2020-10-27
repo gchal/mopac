@@ -514,7 +514,9 @@ class MOPAC(RLAlgorithm):
                 # tweak control (duplicated across range)
                 #self.U[r] += 1 * u_delta
                 #self.U[r] = np.clip(self.U[r], -self.uclip, self.uclip)
+
                 x_acts[r] += 1 * u_delta
+                x_acts[r] = np.clip(x_acts[r], -self.uclip, self.uclip)
 
                 # store first initial observation (and action sequence) belonging to action sequence
                 x_opt_obs[i] = x_obs[l][0]  # initial observation
