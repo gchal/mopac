@@ -25,6 +25,7 @@ params = {
         'deterministic_rewards': False,
         'rollout_schedule': [0, 40, 5, 15],
         'ratio_schedule': [0, 40, 0.8, 0.8],
+        'rollout_batch_size': 10000,
 
         'model_train_freq': 250,
         'model_retain_epochs': 1,
