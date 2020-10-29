@@ -5,7 +5,7 @@ params = {
     'task': 'v2',
 
     'log_dir': '/work/scratch/dn38jyty/ray_mopac/',
-    'exp_name': 'fixedv2',
+    'exp_name': 'fixedv3',
 
     'kwargs': {
         'epoch_length': 1000,
@@ -23,8 +23,8 @@ params = {
         'valuefunc': True,
         'deterministic_obs': False,
         'deterministic_rewards': False,
-        'rollout_schedule': [0, 40, 5, 15],
-        'ratio_schedule': [0, 40, 0.8, 0.8],
+        'rollout_schedule': [0, 80, 5, 15],
+        'ratio_schedule': [0, 80, 0.8, 0.8],
         'rollout_batch_size': 10000,
 
         'model_train_freq': 250,

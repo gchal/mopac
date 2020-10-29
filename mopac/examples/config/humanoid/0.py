@@ -23,8 +23,8 @@ params = {
         'valuefunc': True,
         'deterministic_obs': False,
         'deterministic_rewards': False,
-        'rollout_schedule': [0, 40, 5, 15],
-        'ratio_schedule': [0, 40, 0.95, 0.05],
+        'rollout_schedule': [0, 80, 5, 15],
+        'ratio_schedule': [0, 80, 0.95, 0.05],
         'rollout_batch_size': 10000,
 
         'model_train_freq': 1000,
