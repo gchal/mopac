@@ -62,4 +62,4 @@ If you want to speed up training in terms of wall clock time (but possibly make 
 ## Acknowledgments
 The underlying soft actor-critic implementation in MOPAC comes from [Tuomas Haarnoja](https://scholar.google.com/citations?user=VT7peyEAAAAJ&hl=en) and [Kristian Hartikainen's](https://hartikainen.github.io/) [softlearning](https://github.com/rail-berkeley/softlearning) codebase. The modeling code is a slightly modified version of [Kurtland Chua's](https://kchua.github.io/) [PETS](https://github.com/kchua/handful-of-trials) implementation.
 
-This code is an extension of MBPO ([https://github.com/JannerM/mbpo](https://github.com/JannerM/mbpo)) for model predictive rollouts
+This code is an extension of [MBPO](https://github.com/JannerM/mbpo) for model predictive rollouts.
